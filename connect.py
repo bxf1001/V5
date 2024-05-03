@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QLineEdi
 from PyQt5.QtCore import QRunnable, QObject, pyqtSignal , pyqtSlot, QThreadPool,QTimer
 import warnings
 import uuid
+from queue import Queue
 from pywinauto import Application
 from pywinauto.keyboard import send_keys
 import keyboard
@@ -246,6 +247,7 @@ class UserContactApp(QMainWindow):
         self.thread_pool.setMaxThreadCount(10)
         self.worker_progress = {}
         self.selected_contacts = []
+        self.worker_queue = Queue()
 
     def search_user(self):
         user_id = self.user_id_input.text()
@@ -336,18 +338,28 @@ class UserContactApp(QMainWindow):
         self.start_workers(self.selected_contacts, [timer1, timer2, timer3])
 
     def start_workers(self, contacts, timers):
-        # Reset progress bars before starting workers
-        self.progress_bar.setValue(0)
-        self.timer_progress_bar.setValue(0)
-        
+        # Clear any existing workers from the queue
+        while not self.worker_queue.empty():
+            self.worker_queue.get()
+
+        # Create workers and add them to the queue
         for contact, timer_input in zip(contacts, timers):
             worker = WhatsApp(contact, timer_input)
             worker.signals.progress.connect(self.progress_bar.setValue)
             worker.signals.completed.connect(lambda: self.worker_completed(worker.uuid))  # Connect to worker_completed method
             worker.signals.timer_progress.connect(self.timer_progress_bar.setValue)  # Connect timer progress
-            self.thread_pool.start(worker)
-            self.worker_progress[worker.uuid] = worker  # Store worker instances, not just signals
+            self.worker_queue.put(worker)
 
+        # Start the first worker
+        self.start_next_worker()
+
+    def start_next_worker(self):
+        if not self.worker_queue.empty():
+            worker = self.worker_queue.get()
+            self.thread_pool.start(worker)
+        else:
+            # All workers have been started
+            pass
 
     def cleanup(self, uuid):
         if uuid in self.worker_progress:
@@ -370,7 +382,9 @@ class UserContactApp(QMainWindow):
         self.connect_button.setEnabled(True)
         self.progress_bar.setValue(0)
         self.timer_progress_bar.setValue(0)
-    
+        self.start_next_worker()  # Start the next worker in the queue
+
+        
     def reset_function(self):
         self.user_id_input.clear()
         self.result_label.clear()
